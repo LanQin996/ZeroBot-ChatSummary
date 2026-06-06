@@ -2,8 +2,10 @@ package cn.zerobot.chatsummary;
 
 import java.text.DecimalFormat;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -19,6 +21,8 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 final class ReportAnalyzer {
+    private static final DateTimeFormatter TOPIC_TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
+
     private final Settings settings;
     private final ZoneId zoneId;
     private final Set<String> stopWords;
@@ -189,49 +193,155 @@ final class ReportAnalyzer {
     }
 
     private List<Topic> buildTopics(List<RecordedMessage> messages, List<WordStat> topWords) {
-        List<Topic> topics = new ArrayList<>();
-        Set<String> usedWords = new HashSet<>();
-        for (WordStat word : topWords) {
-            if (topics.size() >= settings.getTopicLimit()) {
-                break;
-            }
-            if (usedWords.stream().anyMatch(used -> used.contains(word.word()) || word.word().contains(used))) {
-                continue;
-            }
-            List<RecordedMessage> related = messages.stream()
-                    .filter(message -> normalizeForWords(message.text()).contains(word.word()))
-                    .toList();
-            if (related.size() < Math.max(2, settings.getMinHotWordCount())) {
-                continue;
-            }
-            usedWords.add(word.word());
-            List<String> speakers = related.stream()
-                    .map(RecordedMessage::displayName)
-                    .distinct()
-                    .limit(4)
-                    .toList();
-            List<String> keywords = topWords.stream()
-                    .map(WordStat::word)
-                    .filter(candidate -> !candidate.equals(word.word()))
-                    .filter(candidate -> related.stream().anyMatch(message -> normalizeForWords(message.text()).contains(candidate)))
-                    .limit(4)
-                    .toList();
-            String sample = related.stream()
-                    .map(RecordedMessage::text)
-                    .filter(text -> text.length() >= 8)
-                    .max(Comparator.comparingInt(String::length))
-                    .orElse(related.get(0).text());
-            String summary = "围绕「" + word.word() + "」产生了 " + related.size()
-                    + " 条发言，主要参与者是 " + String.join("、", speakers)
-                    + "。代表片段：" + SummaryText.trim(sample, 54);
-            topics.add(new Topic(word.word(), related.size(), speakers, keywords, summary));
-        }
+        Set<String> usedTitles = new HashSet<>();
+        List<Topic> topics = topicCandidates(messages, topWords).stream()
+                .sorted(Comparator.comparingInt(TopicCandidate::score).reversed()
+                        .thenComparing(candidate -> candidate.from))
+                .map(candidate -> candidate.toTopic(topWords, zoneId))
+                .filter(topic -> usedTitles.add(normalizeTopicTitle(topic.title())))
+                .limit(settings.getTopicLimit())
+                .toList();
         if (topics.isEmpty() && !messages.isEmpty()) {
-            topics.add(new Topic("日常聊天", messages.size(),
-                    messages.stream().map(RecordedMessage::displayName).distinct().limit(4).toList(),
-                    List.of(), "这段时间的聊天比较分散，更多是轻量的日常交流和即时回应。"));
+            RecordedMessage sample = messages.stream()
+                    .max(Comparator.comparingInt(RecordedMessage::readableLength))
+                    .orElse(messages.get(0));
+            topics = List.of(new Topic("日常交流与即时回应", messages.size(),
+                    messages.stream().map(RecordedMessage::displayName).distinct().limit(5).toList(),
+                    topWords.stream().map(WordStat::word).limit(4).toList(),
+                    "这段时间的聊天比较分散，主要是成员之间的即时交流。代表片段：" + SummaryText.trim(sample.text(), 72),
+                    messages.get(0).time(), messages.get(messages.size() - 1).time(), activityScore(messages.size(),
+                    (int) messages.stream().map(RecordedMessage::userId).distinct().count(), 1),
+                    SummaryText.trim(sample.text(), 90)));
         }
         return topics;
+    }
+
+    private String normalizeTopicTitle(String title) {
+        return SummaryText.cleanText(title)
+                .replaceAll("[\\p{Punct}\\p{IsPunctuation}\\s]+", "")
+                .toLowerCase(Locale.ROOT);
+    }
+
+    private List<TopicCandidate> topicCandidates(List<RecordedMessage> messages, List<WordStat> topWords) {
+        List<TopicCandidate> candidates = new ArrayList<>();
+        List<RecordedMessage> current = new ArrayList<>();
+        for (RecordedMessage message : messages) {
+            if (!isTopicMessage(message)) {
+                continue;
+            }
+            if (!current.isEmpty()) {
+                RecordedMessage previous = current.get(current.size() - 1);
+                long gap = Math.abs(Duration.between(previous.time(), message.time()).toMinutes());
+                if (gap > 12 || (!sharesImportantWord(previous, message, topWords) && gap > 5)) {
+                    addTopicCandidate(candidates, current, topWords);
+                    current = new ArrayList<>();
+                }
+            }
+            current.add(message);
+        }
+        addTopicCandidate(candidates, current, topWords);
+
+        if (candidates.size() < Math.max(2, settings.getTopicLimit() / 2)) {
+            List<String> majorWords = topWords.stream().map(WordStat::word).limit(8).toList();
+            for (String word : majorWords) {
+                List<RecordedMessage> related = messages.stream()
+                        .filter(this::isTopicMessage)
+                        .filter(message -> normalizeForWords(message.text()).contains(word))
+                        .toList();
+                addTopicCandidate(candidates, related, topWords);
+            }
+        }
+        return mergeTopicCandidates(candidates);
+    }
+
+    private void addTopicCandidate(List<TopicCandidate> candidates, List<RecordedMessage> messages,
+                                   List<WordStat> topWords) {
+        if (messages == null || messages.size() < Math.max(2, settings.getMinHotWordCount())) {
+            return;
+        }
+        long speakers = messages.stream().map(RecordedMessage::userId).distinct().count();
+        int readable = messages.stream().mapToInt(RecordedMessage::readableLength).sum();
+        if (readable < 18 && messages.size() < 4) {
+            return;
+        }
+        candidates.add(new TopicCandidate(messages, topicScore(messages, topWords)));
+    }
+
+    private List<TopicCandidate> mergeTopicCandidates(List<TopicCandidate> candidates) {
+        List<TopicCandidate> result = new ArrayList<>();
+        for (TopicCandidate candidate : candidates.stream()
+                .sorted(Comparator.comparingInt(TopicCandidate::score).reversed())
+                .toList()) {
+            Set<Long> ids = candidate.messageIds();
+            Set<String> words = candidate.keywordSet();
+            boolean overlaps = result.stream().anyMatch(existing -> overlap(ids, existing.messageIds()) >= 0.30
+                    || keywordOverlap(words, existing.keywordSet()) >= 0.65
+                    || normalizedEvidence(candidate).equals(normalizedEvidence(existing)));
+            if (!overlaps) {
+                result.add(candidate);
+            }
+        }
+        return result;
+    }
+
+    private double keywordOverlap(Set<String> left, Set<String> right) {
+        if (left.isEmpty() || right.isEmpty()) {
+            return 0;
+        }
+        long hits = left.stream().filter(right::contains).count();
+        return hits / (double) Math.min(left.size(), right.size());
+    }
+
+    private String normalizedEvidence(TopicCandidate candidate) {
+        return SummaryText.cleanText(candidate.evidenceMessage().text())
+                .replaceAll("[\\p{Punct}\\p{IsPunctuation}\\s]+", "")
+                .toLowerCase(Locale.ROOT);
+    }
+
+    private double overlap(Set<Long> left, Set<Long> right) {
+        if (left.isEmpty() || right.isEmpty()) {
+            return 0;
+        }
+        long hits = left.stream().filter(right::contains).count();
+        return hits / (double) Math.min(left.size(), right.size());
+    }
+
+    private boolean isTopicMessage(RecordedMessage message) {
+        if (message == null) {
+            return false;
+        }
+        String text = SummaryText.nullTo(message.text(), "")
+                .replace("[图片]", "")
+                .replace("[表情]", "")
+                .replace("[文件]", "")
+                .trim();
+        return message.readableLength() >= 4 || text.contains("？") || text.contains("?")
+                || text.contains("！") || text.contains("!");
+    }
+
+    private boolean sharesImportantWord(RecordedMessage left, RecordedMessage right, List<WordStat> topWords) {
+        String leftText = normalizeForWords(left.text());
+        String rightText = normalizeForWords(right.text());
+        for (String word : topWords.stream().map(WordStat::word).limit(18).toList()) {
+            if (leftText.contains(word) && rightText.contains(word)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int topicScore(List<RecordedMessage> messages, List<WordStat> topWords) {
+        int messageScore = messages.size() * 7;
+        int speakerScore = (int) messages.stream().map(RecordedMessage::userId).distinct().count() * 10;
+        int readableScore = Math.min(35, messages.stream().mapToInt(RecordedMessage::readableLength).sum() / 10);
+        int keywordScore = 0;
+        String joined = messages.stream().map(message -> normalizeForWords(message.text())).collect(Collectors.joining(" "));
+        for (WordStat word : topWords.stream().limit(12).toList()) {
+            if (joined.contains(word.word())) {
+                keywordScore += 3;
+            }
+        }
+        return SummaryText.clamp(messageScore + speakerScore + readableScore + keywordScore, 0, 100);
     }
 
     private List<Profile> buildProfiles(Iterable<UserAggregate> users, int totalMessages) {
@@ -412,6 +522,181 @@ final class ReportAnalyzer {
 
         int count() {
             return count;
+        }
+    }
+
+    private static final class TopicCandidate {
+        private final List<RecordedMessage> messages;
+        private final Instant from;
+        private final Instant to;
+        private final int score;
+
+        private TopicCandidate(List<RecordedMessage> messages, int score) {
+            this.messages = messages.stream()
+                    .sorted(Comparator.comparing(RecordedMessage::time))
+                    .toList();
+            this.from = this.messages.get(0).time();
+            this.to = this.messages.get(this.messages.size() - 1).time();
+            this.score = score;
+        }
+
+        int score() {
+            return score;
+        }
+
+        Set<Long> messageIds() {
+            return messages.stream().map(RecordedMessage::messageId).collect(Collectors.toSet());
+        }
+
+        Set<String> keywordSet() {
+            return messages.stream()
+                    .flatMap(message -> SummaryText.CHINESE_RUN_PATTERN.matcher(message.text()).results()
+                            .map(match -> match.group().toLowerCase(Locale.ROOT)))
+                    .filter(word -> word.length() >= 2)
+                    .collect(Collectors.toSet());
+        }
+
+        Topic toTopic(List<WordStat> topWords, ZoneId zoneId) {
+            List<String> speakers = messages.stream()
+                    .collect(Collectors.groupingBy(RecordedMessage::displayName, LinkedHashMap::new, Collectors.counting()))
+                    .entrySet().stream()
+                    .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                    .map(Map.Entry::getKey)
+                    .limit(6)
+                    .toList();
+            List<String> keywords = keywords(topWords);
+            RecordedMessage evidenceMessage = evidenceMessage();
+            String evidence = SummaryText.trim(cleanTopicText(evidenceMessage.text()), 96);
+            String title = titleFrom(evidence, keywords);
+            String timeRange = LocalDateTime.ofInstant(from, zoneId).format(TOPIC_TIME_FORMAT)
+                    + "-" + LocalDateTime.ofInstant(to, zoneId).format(TOPIC_TIME_FORMAT);
+            String participantText = speakers.isEmpty() ? "大家" : String.join("、", speakers.stream().limit(3).toList());
+            String summary = participantText + " 在 " + timeRange + " 集中聊到" + summarySubject(title, keywords)
+                    + "，共 " + messages.size() + " 条相关发言。"
+                    + "代表片段：" + evidence;
+            return new Topic(title, messages.size(), speakers, keywords, summary, from, to, score, evidence);
+        }
+
+        private List<String> keywords(List<WordStat> topWords) {
+            String joined = messages.stream()
+                    .map(message -> SummaryText.nullTo(message.text(), "").toLowerCase(Locale.ROOT))
+                    .collect(Collectors.joining(" "));
+            List<String> result = new ArrayList<>();
+            for (WordStat word : topWords) {
+                if (result.size() >= 5) {
+                    break;
+                }
+                if (joined.contains(word.word().toLowerCase(Locale.ROOT))) {
+                    result.add(word.word());
+                }
+            }
+            return result;
+        }
+
+        private RecordedMessage evidenceMessage() {
+            return messages.stream()
+                    .max(Comparator.comparingInt(message -> evidenceScore(message.text())))
+                    .orElse(messages.get(0));
+        }
+
+        private int evidenceScore(String text) {
+            String cleaned = cleanTopicText(text);
+            int score = Math.min(80, cleaned.codePointCount(0, cleaned.length()));
+            if (cleaned.contains("因为") || cleaned.contains("所以") || cleaned.contains("但是")
+                    || cleaned.contains("建议") || cleaned.contains("问题") || cleaned.contains("失败")) {
+                score += 16;
+            }
+            if (cleaned.contains("？") || cleaned.contains("?") || cleaned.contains("！") || cleaned.contains("!")) {
+                score += 8;
+            }
+            return score;
+        }
+
+        private String titleFrom(String evidence, List<String> keywords) {
+            String text = cleanTopicText(evidence)
+                    .replaceAll("^[,，。！？\\s]+", "");
+            String heuristic = heuristicTitle(text, keywords);
+            if (!heuristic.isBlank()) {
+                return heuristic;
+            }
+            if (text.isBlank() && !keywords.isEmpty()) {
+                return "讨论" + String.join("、", keywords.stream().limit(2).toList());
+            }
+            text = text.replaceAll("^(我觉得|我感觉|感觉|就是|这个|那个|然后|所以|但是|可以|可能|应该)", "");
+            int end = firstSentenceEnd(text);
+            if (end > 0) {
+                text = text.substring(0, end);
+            }
+            text = text.replaceAll("[,，。！？!?.；;：:、\\s]+$", "");
+            int maxLength = text.codePointCount(0, text.length()) >= 10 ? 18 : 22;
+            String title = SummaryText.trim(text, maxLength);
+            if (title.codePointCount(0, title.length()) < 4 && !keywords.isEmpty()) {
+                title = "讨论" + String.join("、", keywords.stream().limit(2).toList());
+            }
+            return title;
+        }
+
+        private String heuristicTitle(String text, List<String> keywords) {
+            String normalized = SummaryText.nullTo(text, "").toLowerCase(Locale.ROOT);
+            if (containsAny(normalized, "分身", "主体", "本体")
+                    && containsAny(normalized, "攻击", "机制", "时间", "有限", "窗口")) {
+                return "分身攻击窗口与本体机制讨论";
+            }
+            if (containsAny(normalized, "图片", "image", "gpt-image", "生图", "绘图")
+                    && containsAny(normalized, "失败", "报错", "不可用", "分组", "接口", "渠道")) {
+                return "图片生成报错与分组切换测试";
+            }
+            if (containsAny(normalized, "服务器", "服务端", "群服")
+                    && containsAny(normalized, "挂", "故障", "攻击", "被打", "不可用", "排查")) {
+                return "服务器故障与可用性排查";
+            }
+            if (containsAny(normalized, "gpt", "claude", "中转", "转站")
+                    && containsAny(normalized, "价格", "低价", "成本", "引流", "回本")) {
+                return "AI 中转价格与成本争议";
+            }
+            if (containsAny(normalized, "提示词", "prompt", "报告", "总结")
+                    && containsAny(normalized, "ai", "生成", "优化", "效果")) {
+                return "AI 报告提示词与效果优化";
+            }
+            if (keywords.size() >= 2) {
+                return SummaryText.trim(String.join("与", keywords.stream().limit(2).toList()) + "讨论", 22);
+            }
+            return "";
+        }
+
+        private boolean containsAny(String text, String... values) {
+            for (String value : values) {
+                if (text.contains(value)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private int firstSentenceEnd(String text) {
+            int best = -1;
+            for (String delimiter : List.of("。", "！", "？", "!", "?", "；", ";")) {
+                int index = text.indexOf(delimiter);
+                if (index >= 6 && (best < 0 || index < best)) {
+                    best = index;
+                }
+            }
+            return best < 0 ? -1 : best + 1;
+        }
+
+        private String summarySubject(String title, List<String> keywords) {
+            if (title == null || title.isBlank()) {
+                return keywords.isEmpty() ? "一个集中话题" : "「" + String.join("、", keywords.stream().limit(2).toList()) + "」";
+            }
+            return "「" + title + "」";
+        }
+
+        private static String cleanTopicText(String text) {
+            return SummaryText.cleanText(text)
+                    .replace("[图片]", "")
+                    .replace("[表情]", "")
+                    .replace("[文件]", "")
+                    .trim();
         }
     }
 }

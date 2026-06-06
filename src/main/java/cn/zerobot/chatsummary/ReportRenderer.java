@@ -380,43 +380,75 @@ final class ReportRenderer {
     }
 
     private int drawTopics(Graphics2D g, ReportData data, int x, int y, int w) {
-        Font body = font(9, Font.PLAIN);
+        Font body = font(10, Font.PLAIN);
         FontMetrics fm = g.getFontMetrics(body);
         List<List<String>> wrapped = data.topics().stream()
-                .map(topic -> wrap(topic.summary(), fm, w - 34, 4))
+                .map(topic -> wrap(topic.summary(), fm, w - 38, 5))
                 .toList();
-        int h = 34 + wrapped.stream().mapToInt(lines -> 58 + lines.size() * 13).sum() + 8;
+        List<Integer> chipRows = data.topics().stream()
+                .map(topic -> topicChipRows(g, topic, w - 40))
+                .toList();
+        int h = 34;
+        for (int i = 0; i < data.topics().size(); i++) {
+            h += 50 + chipRows.get(i) * 20 + wrapped.get(i).size() * 15 + 8;
+        }
+        h += 8;
         drawSection(g, x, y, w, h, "主要话题");
         Map<String, String> userIds = userIdsByName(data);
         int cy = y + 34;
         for (int i = 0; i < data.topics().size(); i++) {
             Topic topic = data.topics().get(i);
             List<String> lines = wrapped.get(i);
-            int cardH = 50 + lines.size() * 13;
+            int cardH = 42 + chipRows.get(i) * 20 + lines.size() * 15 + 8;
             drawRound(g, x + 10, cy, w - 20, cardH, 5, CARD);
-            drawText(g, "#" + (i + 1), x + 20, cy + 17, 10, Font.BOLD, ACCENTS[i % ACCENTS.length]);
-            drawText(g, topic.title(), x + 50, cy + 17, 12, Font.BOLD, TEXT);
-            drawTextRight(g, topic.count() + "条", x + w - 18, cy + 17, 9, Font.PLAIN, MUTED);
+            drawText(g, "#" + (i + 1), x + 20, cy + 20, 11, Font.BOLD, ACCENTS[i % ACCENTS.length]);
+            drawText(g, SummaryText.trim(topic.title(), 22), x + 52, cy + 20, 13, Font.BOLD, TEXT);
+            String score = topic.score() > 0 ? " 热度 " + topic.score() : "";
+            drawTextRight(g, topic.count() + "条" + score, x + w - 18, cy + 20, 9, Font.BOLD, ACCENTS[i % ACCENTS.length]);
+            drawText(g, topicTimeRange(topic), x + 20, cy + 36, 9, Font.PLAIN, SOFT);
             int chipX = x + 20;
-            int chipY = cy + 25;
-            for (int j = 0; j < Math.min(5, topic.speakers().size()); j++) {
+            int chipY = cy + 46;
+            int available = w - 40;
+            for (int j = 0; j < Math.min(6, topic.speakers().size()); j++) {
                 String speaker = topic.speakers().get(j);
-                int chipW = Math.min(88, 26 + g.getFontMetrics(font(8, Font.PLAIN)).stringWidth(speaker));
+                int chipW = Math.min(112, 28 + g.getFontMetrics(font(8, Font.PLAIN)).stringWidth(speaker));
+                if (chipX + chipW > x + 20 + available) {
+                    chipX = x + 20;
+                    chipY += 20;
+                }
                 drawNameChip(g, chipX, chipY, chipW, 14, userIdForName(userIds, speaker), speaker,
                         ACCENTS[(i + j) % ACCENTS.length]);
                 chipX += chipW + 4;
-                if (chipX > x + w - 92) {
-                    break;
-                }
             }
-            int textY = cy + 50;
+            int textY = cy + 50 + chipRows.get(i) * 20;
             for (String line : lines) {
-                drawText(g, line, x + 20, textY, 9, Font.PLAIN, MUTED);
-                textY += 13;
+                drawText(g, line, x + 20, textY, 10, Font.PLAIN, MUTED);
+                textY += 15;
             }
             cy += cardH + 6;
         }
         return y + h;
+    }
+
+    private int topicChipRows(Graphics2D g, Topic topic, int availableWidth) {
+        int rows = 1;
+        int cursor = 0;
+        for (String speaker : topic.speakers().stream().limit(6).toList()) {
+            int chipW = Math.min(112, 28 + g.getFontMetrics(font(8, Font.PLAIN)).stringWidth(speaker));
+            if (cursor > 0 && cursor + chipW > availableWidth) {
+                rows++;
+                cursor = 0;
+            }
+            cursor += chipW + 4;
+        }
+        return rows;
+    }
+
+    private String topicTimeRange(Topic topic) {
+        if (topic.from() == null || topic.to() == null) {
+            return "";
+        }
+        return formatShortTime(topic.from()) + "-" + formatShortTime(topic.to());
     }
 
     private int drawProfiles(Graphics2D g, ReportData data, int x, int y, int w) {

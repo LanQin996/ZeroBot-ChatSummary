@@ -165,11 +165,12 @@ final class AiSummaryService {
                   "summary": ["2 到 3 段，每段 45 到 95 个中文字符"],
                   "keywords": ["12 到 24 个能代表这段聊天上下文的热词，优先保留专有名词、需求点、共识和梗"],
                   "tags": [{"title":"4 到 8 字奖项名","value":"8 字内结果","description":"16 到 28 字解释"}],
-                  "topics": [{"title":"短标题","keywords":["相关热词"],"summary":"45 到 95 个中文字符"}],
+                  "topics": [{"title":"12 到 22 字事件式标题，必须说明发生了什么，不要只写抽象关键词","keywords":["相关热词"],"summary":"70 到 130 个中文字符，说明谁围绕什么问题/事件讨论、有什么观点或结论"}],
                   "profiles": [{"userId":"必须来自输入 candidates","title":"6 字内标签","description":"28 到 55 个中文字符"}],
                   "quotes": [{"name":"原发言人名称","text":"尽量使用原话或轻微清理后的原话"}]
                 }
                 tags 最多 4，topics 最多 5，profiles 最多 6，quotes 最多 5。
+                topics.title 禁止只输出“时间、攻击、机制、分身、主体、图片、AI”这类单词；应该像“分身攻击窗口与机制讨论”“图片生成接口报错与分组切换测试”这样能直接看懂。
                 keywords 不要输出“这个、那个、我们、可以、哈哈”等泛词。
                 如果聊天内容很少，也要输出精简但真实的报告方案。""";
     }
@@ -362,15 +363,17 @@ final class AiSummaryService {
         for (int i = 0; i < node.size() && result.size() < settings.getTopicLimit(); i++) {
             JsonNode item = node.get(i);
             Topic fallback = fallbackTopics.isEmpty()
-                    ? new Topic("群聊热点", data.totalMessages(), List.of(), List.of(), "")
+                    ? new Topic("群聊热点", data.totalMessages(), List.of(), List.of(), "",
+                    data.window().from(), data.window().to(), 0, "")
                     : fallbackTopics.get(Math.min(i, fallbackTopics.size() - 1));
-            String title = clean(item.path("title").asText(fallback.title()), 12);
-            String summary = clean(item.path("summary").asText(fallback.summary()), 100);
+            String title = clean(item.path("title").asText(fallback.title()), 24);
+            String summary = clean(item.path("summary").asText(fallback.summary()), 140);
             if (title.isBlank() || summary.isBlank()) {
                 continue;
             }
             List<String> keywords = parseTopicKeywords(item.path("keywords"), fallback.keywords());
-            result.add(new Topic(title, fallback.count(), fallback.speakers(), keywords, summary));
+            result.add(new Topic(title, fallback.count(), fallback.speakers(), keywords, summary,
+                    fallback.from(), fallback.to(), fallback.score(), fallback.evidence()));
         }
         return result;
     }
