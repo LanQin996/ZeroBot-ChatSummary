@@ -72,7 +72,7 @@ maxQuoteLength: 90
 
 # AI 报告策划默认关闭。开启后由 AI 决定摘要、热词、话题、群奖项、画像和金句。
 # 消息数、参与人数、活跃时段等统计数据仍由插件本地计算，避免 AI 改写事实。
-aiEnabled: false
+aiEnabled: true
 
 # OpenAI Chat Completions 兼容接口地址。
 # OpenAI 官方保持默认值；OneAPI、DeepSeek 兼容网关或自建代理可改成对应 /v1 地址。

@@ -79,16 +79,30 @@ final class AiSummaryService {
             HttpRequest request = HttpRequest.newBuilder(endpoint())
                     .timeout(Duration.ofSeconds(timeoutSeconds()))
                     .header("Authorization", "Bearer " + apiKey)
+                    .header("Accept", "application/json")
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(requestBody(data, includeImages))))
                     .build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            String body = SummaryText.nullTo(response.body(), "");
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 logger.warn("AI chat summary request failed: status={}, body={}",
-                        response.statusCode(), SummaryText.trim(response.body(), 240));
+                        response.statusCode(), SummaryText.trim(body, 240));
                 return Optional.empty();
             }
-            return parseResponse(response.body(), data);
+            if (!looksLikeJson(body)) {
+                logger.warn("AI chat summary response was not JSON: status={}, contentType={}, body={}",
+                        response.statusCode(),
+                        response.headers().firstValue("content-type").orElse("unknown"),
+                        SummaryText.trim(stripHtml(body), 240));
+                return Optional.empty();
+            }
+            try {
+                return parseResponse(body, data);
+            } catch (IOException e) {
+                logger.warn("AI chat summary response JSON parse failed: {}", SummaryText.trim(body, 240));
+                return Optional.empty();
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.warn("AI chat summary request was interrupted", e);
@@ -97,6 +111,21 @@ final class AiSummaryService {
             logger.warn("AI chat summary request failed", e);
             return Optional.empty();
         }
+    }
+
+    private boolean looksLikeJson(String body) {
+        if (body == null) {
+            return false;
+        }
+        String trimmed = body.stripLeading();
+        return trimmed.startsWith("{") || trimmed.startsWith("[");
+    }
+
+    private String stripHtml(String body) {
+        String text = SummaryText.nullTo(body, "").replaceAll("(?is)<script.*?</script>", " ")
+                .replaceAll("(?is)<style.*?</style>", " ")
+                .replaceAll("(?is)<[^>]+>", " ");
+        return text.replaceAll("\\s+", " ").trim();
     }
 
     private ObjectNode requestBody(ReportData data, boolean includeImages) {
