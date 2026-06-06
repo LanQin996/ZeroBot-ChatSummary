@@ -1,0 +1,69 @@
+# 生成报告所需权限节点。
+# reportDefaultAllowed 为 true 时，没有权限插件接管的情况下默认允许所有人使用。
+reportPermission: chat-summary.report
+reportDefaultAllowed: true
+noPermissionReply: 你没有权限生成群聊总结
+
+# 是否先回复“正在生成”。群聊较活跃或开启 AI 时建议改成 true。
+sendGeneratingReply: false
+
+# 影响“今日/昨天”和报告时间显示。
+timeZone: Asia/Shanghai
+
+# 默认统计最近多少小时。
+defaultHours: 24
+
+# 单次命令允许查询的最大小时数。
+maxHours: 168
+
+# 内存里保留最近多少小时的群消息，至少应不小于 maxHours。
+retentionHours: 168
+
+# 每个群最多缓存多少条消息，防止长期运行占用过多内存。
+maxMessagesPerGroup: 6000
+
+# 忽略以 /、!、！、. 开头的普通消息，避免命令文本进入报告。
+ignoreCommandLikeMessages: true
+
+# 报告设计宽度。renderScale 会放大实际输出像素，让文字更清晰。
+reportWidth: 560
+renderScale: 2
+
+# 各个报告模块的展示数量限制。
+topUserLimit: 12
+hotWordLimit: 60
+minHotWordCount: 2
+topicLimit: 5
+profileLimit: 6
+interactionLimit: 7
+quoteLimit: 5
+minQuoteLength: 10
+maxQuoteLength: 90
+
+# AI 报告策划默认关闭。开启后由 AI 决定摘要、热词、话题、群奖项、画像和金句。
+# 消息数、参与人数、活跃时段等统计数据仍由插件本地计算，避免 AI 改写事实。
+aiEnabled: false
+
+# OpenAI Chat Completions 兼容接口地址。
+# OpenAI 官方保持默认值；OneAPI、DeepSeek 兼容网关或自建代理可改成对应 /v1 地址。
+aiBaseUrl: https://api.openai.com/v1
+
+# 可以直接填写 key；更推荐留空并使用 aiApiKeyEnv 指定的环境变量。
+aiApiKey: ""
+aiApiKeyEnv: OPENAI_API_KEY
+
+# 默认模型。使用兼容网关时，改成服务商支持的模型名。
+aiModel: gpt-5.4-nano
+
+# AI 请求超时时间，单位秒。
+aiTimeoutSeconds: 120
+
+# 发送给 AI 的聊天记录上限。上下文越多，报告越容易抓到真正精华，也会增加 token 消耗。
+aiMaxMessages: 360
+aiMaxChars: 30000
+
+# AI 回复 token 上限。报告内容越丰富，这里可以适当调高。
+aiMaxOutputTokens: 2200
+
+# -1 表示不发送 temperature 参数，兼容不同模型；需要时可改为 0.2、0.4 等。
+aiTemperature: -1

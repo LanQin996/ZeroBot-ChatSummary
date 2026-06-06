@@ -16,4 +16,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "zerobot-plugin-template"
+rootProject.name = "zerobot-chat-summary"

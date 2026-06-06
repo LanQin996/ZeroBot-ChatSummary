@@ -1,4 +1,11 @@
-id: plugin-template
-name: Plugin Template
+id: chat-summary
+name: Chat Summary
 version: 1.0.0
-main: cn.zerobot.template.TemplatePlugin
+main: cn.zerobot.chatsummary.ChatSummaryPlugin
+commands:
+  - name: 群总结
+    aliases:
+      - 群聊总结
+      - summary
+    description: 生成当前群最近聊天内容的长图总结报告。
+    usage: /群总结 [小时数|今日|昨天]

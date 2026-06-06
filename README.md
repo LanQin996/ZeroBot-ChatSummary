@@ -1,131 +1,126 @@
-# ZeroBot 插件模板
+# ZeroBot Chat Summary
 
-这是一个可以独立复制出去的新插件模板。
+群聊总结报告插件。插件会在运行时缓存群消息，收到总结命令后生成一张长图报告并回复到群里。
 
-插件开发者不需要下载整个 ZeroBot 源码，只需要能从 Maven 仓库拉到：
+报告内容包括：
 
-```text
-cn.zerobot:zerobot-plugin-api:0.1.0
-```
+- 群聊概况和统计卡片
+- 参与成员列表
+- 24 小时活跃分布
+- 活跃用户排行
+- 热词词云
+- 群奖项、互动关系、主要话题
+- 群友画像、群聊金句
 
-`zerobot-plugin-api` 是插件编译期依赖，ZeroBot 主程序运行时会提供这套 API。
+## 使用方式
 
-## 复制后需要修改
-
-1. 修改 `build.gradle.kts`：
-
-```kotlin
-plugins {
-    java
-}
-
-group = "your.group"
-version = "1.0.0"
-
-dependencies {
-    compileOnly("cn.zerobot:zerobot-plugin-api:0.1.0")
-}
-
-tasks.jar {
-    archiveBaseName.set("你的插件 jar 名称")
-}
-```
-
-仓库配置在 `settings.gradle.kts` 里，当前使用：
-
-```kotlin
-maven {
-    url = uri("https://nexus.jsdu.cn/repository")
-}
-```
-
-2. 修改 `src/main/resources/plugin.yml`：
-
-```yml
-id: your-plugin-id
-name: Your Plugin Name
-version: 1.0.0
-main: your.package.YourPlugin
-```
-
-3. 修改 Java 包名和插件主类。
-
-`plugin.yml` 里的 `main` 必须等于插件主类的完整类名。
-
-## 构建模板
-
-在插件项目根目录执行：
-
-```powershell
-.\gradlew.bat jar
-```
-
-生成的插件 jar：
-
-```text
-build\libs\zerobot-plugin-template-1.0.0.jar
-```
-
-把 jar 放进 ZeroBot 运行目录的 `plugins` 文件夹，然后在 ZeroBot 控制台执行：
+把插件 JAR 放入 ZeroBot 运行目录的 `plugins` 文件夹，然后在 ZeroBot 控制台执行：
 
 ```text
 reload-all
 ```
 
-## 常用监听
+群内发送以下任一命令：
 
-```java
-context.onGroupMessage(event -> {});    // 群消息
-context.onPrivateMessage(event -> {});  // 私聊消息
-context.onNotice(event -> {});          // 通知事件
-context.onRequest(event -> {});         // 请求事件
-context.onEvent(event -> {});           // 所有事件
+```text
+/群总结
+/群聊总结
+/summary
 ```
 
-## 权限节点
+命令参数：
 
-模板已经示范了权限判断：
-
-```java
-if (!context.hasPermission(event, "template.ping", true)) {
-    return;
-}
+```text
+/群总结          # 默认总结最近 24 小时
+/群总结 6        # 总结最近 6 小时
+/群总结 2天      # 总结最近 48 小时
+/群总结 今日     # 总结今天 00:00 到现在
+/群总结 昨天     # 总结昨天 00:00 到今天 00:00
 ```
 
-ZeroBot 默认只读取主配置里的超级管理员：
+插件只会总结它加载后缓存到的消息。刚安装后立刻生成报告时，如果群里还没有新消息，会提示暂无可用记录。
+
+## 构建
+
+本项目依赖 `cn.zerobot:zerobot-plugin-api:0.1.5`，该 API 使用 Java 21 编译。请使用 JDK 21 构建：
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Zulu\zulu-21'
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+.\gradlew.bat jar
+```
+
+生成的插件：
+
+```text
+build\libs\zerobot-chat-summary-1.0.0.jar
+```
+
+## 配置
+
+首次加载后，ZeroBot 会生成：
+
+```text
+config/chat-summary/config.yml
+```
+
+常用配置项：
 
 ```yml
-superAdmins:
-  - "123456"
+reportPermission: chat-summary.report
+reportDefaultAllowed: true
+defaultHours: 24
+maxHours: 168
+retentionHours: 168
+maxMessagesPerGroup: 6000
+reportWidth: 560
+renderScale: 2
+sendGeneratingReply: false
+timeZone: Asia/Shanghai
+aiEnabled: false
+aiBaseUrl: https://api.openai.com/v1
+aiApiKey: ""
+aiApiKeyEnv: OPENAI_API_KEY
+aiModel: gpt-5.4-nano
+aiTimeoutSeconds: 20
+aiMaxMessages: 180
+aiMaxChars: 12000
+aiMaxOutputTokens: 1500
 ```
 
-更细的权限组、继承和临时权限可以由后续权限管理插件接管。
+新版 ZeroBot 的命令入口声明在 `plugin.yml` 的 `commands` 中。
 
-如果命令不需要权限，直接不要调用 `hasPermission()`。
-如果命令有权限节点但默认所有人可用，使用第三个参数 `true`。
-
-## 插件配置
-
-模板已经示范了插件配置：
-
-```java
-Settings settings = context.loadConfig("config.yml", Settings.class);
-```
-
-首次加载插件时，ZeroBot 会自动生成：
+生成的报告图片会保存在：
 
 ```text
-config/<插件ID>/config.yml
+data/chat-summary/reports/
 ```
 
-插件运行数据可以放到：
+## AI 报告策划
 
-```java
-context.dataDir()
+默认不开启 AI，插件会使用本地规则生成报告。开启后，AI 会根据聊天上下文决定摘要、热词、群奖项、主要话题、群友画像和金句，插件负责把 AI 的报告方案渲染成清晰长图。
+
+```yml
+aiEnabled: true
+aiApiKey: sk-...
 ```
 
-默认目录：
+也可以不把 key 写进配置，改用环境变量：
+
+```powershell
+$env:OPENAI_API_KEY='sk-...'
+```
+
+`aiBaseUrl` 使用 OpenAI Chat Completions 兼容接口，默认请求 `https://api.openai.com/v1/chat/completions`。如果你用 OneAPI、DeepSeek 兼容网关或自建代理，可以改成对应的 `/v1` 地址，并把 `aiModel` 改成服务商支持的模型。
+
+消息数、参与人数、活跃时段等统计数据仍由插件本地计算，避免 AI 改写事实。接口超时、返回格式异常或未配置 key 时，会自动回退到本地规则版报告。
+
+## 权限
+
+默认权限节点：
 
 ```text
-data/<插件ID>/
+chat-summary.report
 ```
+
+`reportDefaultAllowed: true` 表示没有额外权限插件接管时，所有群成员默认可用。需要只允许管理员或指定用户使用时，可以把它改为 `false`，再由权限插件分配该节点。
