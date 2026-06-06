@@ -1,6 +1,7 @@
 package cn.zerobot.chatsummary;
 
 import java.time.Instant;
+import java.util.List;
 
 record RecordedMessage(
         String groupId,
@@ -13,8 +14,20 @@ record RecordedMessage(
         int imageCount,
         int atCount,
         int faceCount,
-        int fileCount
+        int fileCount,
+        List<ImageAttachment> images
 ) {
+    RecordedMessage {
+        images = images == null ? List.of() : List.copyOf(images);
+        imageCount = Math.max(imageCount, images.size());
+    }
+
+    RecordedMessage(String groupId, String userId, String displayName, String role, String text, Instant time,
+                    long messageId, int imageCount, int atCount, int faceCount, int fileCount) {
+        this(groupId, userId, displayName, role, text, time, messageId, imageCount, atCount, faceCount, fileCount,
+                List.of());
+    }
+
     int readableLength() {
         String normalized = SummaryText.nullTo(text, "")
                 .replace("[图片]", "")

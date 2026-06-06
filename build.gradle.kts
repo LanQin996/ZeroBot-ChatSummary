@@ -21,6 +21,9 @@ configurations.configureEach {
     resolutionStrategy.cacheChangingModulesFor(0, "seconds")
 }
 
+sourceSets["test"].compileClasspath += sourceSets["main"].compileClasspath
+sourceSets["test"].runtimeClasspath += sourceSets["main"].compileClasspath
+
 tasks.jar {
     archiveBaseName.set("zerobot-chat-summary")
 }
@@ -37,4 +40,11 @@ tasks.register<JavaExec>("verifyJsonMessageStore") {
     description = "Verify JSONL chat message persistence with a small smoke test."
     classpath = sourceSets["test"].runtimeClasspath + sourceSets["main"].compileClasspath
     mainClass.set("cn.zerobot.chatsummary.JsonMessageStoreSmokeTest")
+}
+
+tasks.register<JavaExec>("verifyAvatarService") {
+    group = "verification"
+    description = "Verify QQ group and user avatar downloading with a small smoke test."
+    classpath = sourceSets["test"].runtimeClasspath + sourceSets["main"].compileClasspath
+    mainClass.set("cn.zerobot.chatsummary.AvatarServiceSmokeTest")
 }

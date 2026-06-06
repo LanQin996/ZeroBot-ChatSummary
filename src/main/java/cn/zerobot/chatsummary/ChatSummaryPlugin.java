@@ -17,6 +17,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,6 +39,8 @@ public class ChatSummaryPlugin implements BotPlugin {
     private Settings settings;
     private ZoneId zoneId;
     private MessageStore messageStore;
+    private AvatarService avatarService;
+    private ImageCacheService imageCacheService;
     private ScheduledExecutorService cleanupExecutor;
     private boolean legacyCommandFallback;
 
@@ -49,6 +52,8 @@ public class ChatSummaryPlugin implements BotPlugin {
         this.zoneId = SummaryText.resolveZone(settings.getTimeZone());
         Files.createDirectories(reportsDir());
         this.messageStore = createMessageStore(context);
+        this.avatarService = createAvatarService(context);
+        this.imageCacheService = createImageCacheService(context);
         startCleanupTask();
 
         this.legacyCommandFallback = !registerSummaryCommand(context);
@@ -69,6 +74,10 @@ public class ChatSummaryPlugin implements BotPlugin {
         if (cleanupExecutor != null) {
             cleanupExecutor.shutdownNow();
             cleanupExecutor = null;
+        }
+        if (imageCacheService != null) {
+            imageCacheService.close();
+            imageCacheService = null;
         }
         buffers.clear();
         if (context != null) {
@@ -98,6 +107,9 @@ public class ChatSummaryPlugin implements BotPlugin {
         buffers.computeIfAbsent(message.groupId(), key -> new GroupBuffer())
                 .add(message, retentionCutoff(), maxMessagesPerGroup());
         appendStoredMessage(message);
+        if (imageCacheService != null) {
+            imageCacheService.cacheAsync(message);
+        }
     }
 
     private boolean registerSummaryCommand(BotContext context) {
@@ -145,11 +157,17 @@ public class ChatSummaryPlugin implements BotPlugin {
         try {
             String groupName = resolveGroupName(groupId);
             ReportData data = new ReportAnalyzer(settings, zoneId).analyze(groupId, groupName, window, messages);
-            data = new AiSummaryService(settings, zoneId, context.logger())
+            if (imageCacheService != null) {
+                imageCacheService.warmup(data.messages());
+            }
+            data = new AiSummaryService(settings, zoneId, context.logger(), imageCacheService)
                     .enhance(data)
                     .map(data::withEnhancement)
                     .orElse(data);
-            BufferedImage image = new ReportRenderer(settings, zoneId).render(data);
+            if (avatarService != null) {
+                avatarService.warmup(data);
+            }
+            BufferedImage image = new ReportRenderer(settings, zoneId, avatarService, imageCacheService).render(data);
             Path output = reportsDir().resolve("chat-summary-" + groupId + "-"
                     + LocalDateTime.now(zoneId).format(FILE_TIME) + ".png");
             ImageIO.write(image, "png", output.toFile());
@@ -187,13 +205,15 @@ public class ChatSummaryPlugin implements BotPlugin {
                 content.imageCount(),
                 content.atCount(),
                 content.faceCount(),
-                content.fileCount()
+                content.fileCount(),
+                content.images()
         );
     }
 
     private MessageContent extractContent(GroupMessageEvent event) {
         JsonNode message = event.message();
         StringBuilder text = new StringBuilder();
+        List<ImageAttachment> images = new ArrayList<>();
         int imageCount = 0;
         int atCount = 0;
         int faceCount = 0;
@@ -215,7 +235,18 @@ public class ChatSummaryPlugin implements BotPlugin {
                     }
                     case "image" -> {
                         imageCount++;
+                        ImageAttachment image = new ImageAttachment(
+                                data.path("file").asText(""),
+                                SummaryText.firstNotBlank(data.path("file_id").asText(null), data.path("fileId").asText(null)),
+                                data.path("url").asText(""),
+                                data.path("summary").asText(""),
+                                SummaryText.firstNotBlank(data.path("sub_type").asText(null), data.path("subType").asText(null))
+                        );
+                        images.add(image);
                         text.append(" [图片]");
+                        if (!image.summary().isBlank()) {
+                            text.append(' ').append(image.summary());
+                        }
                     }
                     case "face", "mface", "emoji" -> {
                         faceCount++;
@@ -250,7 +281,7 @@ public class ChatSummaryPlugin implements BotPlugin {
         if (fileCount == 0) {
             fileCount = SummaryText.countMatches(SummaryText.CQ_FILE_PATTERN, rawMessage);
         }
-        return new MessageContent(cleaned, imageCount, atCount, faceCount, fileCount);
+        return new MessageContent(cleaned, images, imageCount, atCount, faceCount, fileCount);
     }
 
     private CommandRequest parseCommand(String rawText) {
@@ -355,6 +386,14 @@ public class ChatSummaryPlugin implements BotPlugin {
         return context.dataDir().resolve("messages");
     }
 
+    private Path avatarsDir() {
+        return context.dataDir().resolve("avatars");
+    }
+
+    private Path imagesDir() {
+        return context.dataDir().resolve("images");
+    }
+
     private MessageStore createMessageStore(BotContext context) {
         if (!settings.isStorageEnabled()) {
             return null;
@@ -365,6 +404,34 @@ public class ChatSummaryPlugin implements BotPlugin {
             return store;
         } catch (Exception e) {
             context.logger().warn("Failed to initialize chat message storage, using memory buffer only", e);
+            return null;
+        }
+    }
+
+    private AvatarService createAvatarService(BotContext context) {
+        if (!settings.isAvatarEnabled()) {
+            return null;
+        }
+        try {
+            AvatarService service = new AvatarService(settings, avatarsDir(), context.logger());
+            service.prune();
+            return service;
+        } catch (Exception e) {
+            context.logger().warn("Failed to initialize avatar cache, using fallback avatars", e);
+            return null;
+        }
+    }
+
+    private ImageCacheService createImageCacheService(BotContext context) {
+        if (!settings.isImageCacheEnabled()) {
+            return null;
+        }
+        try {
+            ImageCacheService service = new ImageCacheService(settings, imagesDir(), zoneId, context.logger());
+            service.prune();
+            return service;
+        } catch (Exception e) {
+            context.logger().warn("Failed to initialize group image cache, image preview will be disabled", e);
             return null;
         }
     }
@@ -384,6 +451,12 @@ public class ChatSummaryPlugin implements BotPlugin {
             cleanupMemoryBuffers();
             if (messageStore != null) {
                 messageStore.prune(storageCutoff());
+            }
+            if (avatarService != null) {
+                avatarService.prune();
+            }
+            if (imageCacheService != null) {
+                imageCacheService.prune();
             }
         } catch (Exception e) {
             if (context != null) {

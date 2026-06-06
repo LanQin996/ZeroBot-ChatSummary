@@ -9,6 +9,8 @@ import java.awt.Graphics2D;
 import java.awt.GraphicsEnvironment;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.Shape;
+import java.awt.geom.Ellipse2D;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 import java.time.Instant;
@@ -16,7 +18,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 final class ReportRenderer {
@@ -39,11 +43,23 @@ final class ReportRenderer {
 
     private final Settings settings;
     private final ZoneId zoneId;
+    private final AvatarService avatarService;
+    private final ImageCacheService imageCacheService;
     private final String fontFamily;
 
     ReportRenderer(Settings settings, ZoneId zoneId) {
+        this(settings, zoneId, null, null);
+    }
+
+    ReportRenderer(Settings settings, ZoneId zoneId, AvatarService avatarService) {
+        this(settings, zoneId, avatarService, null);
+    }
+
+    ReportRenderer(Settings settings, ZoneId zoneId, AvatarService avatarService, ImageCacheService imageCacheService) {
         this.settings = settings;
         this.zoneId = zoneId;
+        this.avatarService = avatarService;
+        this.imageCacheService = imageCacheService;
         this.fontFamily = chooseFontFamily();
     }
 
@@ -64,6 +80,7 @@ final class ReportRenderer {
         y = drawHeader(g, data, margin, y, innerWidth);
         y = drawLead(g, data, margin, y + 8, innerWidth);
         y = drawMetrics(g, data, margin, y + 8, innerWidth);
+        y = drawImagePreview(g, data, margin, y + 8, innerWidth);
         y = drawParticipants(g, data, margin, y + 8, innerWidth);
         y = drawActivity(g, data, margin, y + 8, innerWidth);
         y = drawTopUsers(g, data, margin, y + 8, innerWidth);
@@ -89,7 +106,7 @@ final class ReportRenderer {
     private int drawHeader(Graphics2D g, ReportData data, int x, int y, int w) {
         int h = 72;
         drawRound(g, x, y, w, h, 6, BACKGROUND);
-        drawAvatar(g, x + 8, y + 9, 44, data.groupId(), data.groupName());
+        drawAvatar(g, x + 8, y + 9, 44, AvatarService.Type.GROUP, data.groupId(), data.groupName());
         drawText(g, "群聊总结报告", x + 62, y + 28, 22, Font.BOLD, TEXT);
         drawText(g, data.groupName(), x + 62, y + 48, 12, Font.PLAIN, MUTED);
         String range = formatTime(data.window().from()) + " - " + formatTime(data.window().to());
@@ -133,6 +150,37 @@ final class ReportRenderer {
             g.fillRoundRect(cx + 9, cy + 10, 3, cellH - 20, 3, 3);
             drawText(g, metric.label(), cx + 18, cy + 21, 10, Font.PLAIN, MUTED);
             drawText(g, metric.value(), cx + 18, cy + 43, 17, Font.BOLD, TEXT);
+        }
+        return y + h;
+    }
+
+    private int drawImagePreview(Graphics2D g, ReportData data, int x, int y, int w) {
+        if (imageCacheService == null) {
+            return y - 8;
+        }
+        List<ImageCacheService.ReportImage> images = imageCacheService.reportImages(data);
+        if (images.isEmpty()) {
+            return y - 8;
+        }
+        int gap = 6;
+        int columns = 3;
+        int tileW = (w - 24 - gap * (columns - 1)) / columns;
+        int imageH = 92;
+        int tileH = imageH + 36;
+        int rows = (images.size() + columns - 1) / columns;
+        int h = 36 + rows * tileH + Math.max(0, rows - 1) * gap + 10;
+        drawSection(g, x, y, w, h, "图片速览");
+        for (int i = 0; i < images.size(); i++) {
+            ImageCacheService.ReportImage image = images.get(i);
+            int col = i % columns;
+            int row = i / columns;
+            int cx = x + 12 + col * (tileW + gap);
+            int cy = y + 36 + row * (tileH + gap);
+            drawRound(g, cx, cy, tileW, tileH, 5, CARD);
+            drawThumbnail(g, image.image(), cx + 5, cy + 5, tileW - 10, imageH, 4, false);
+            drawText(g, SummaryText.trim(image.caption(), 12), cx + 7, cy + imageH + 20, 9, Font.BOLD, TEXT);
+            drawText(g, SummaryText.trim(image.sender(), 10) + " · " + formatShortTime(image.time()),
+                    cx + 7, cy + imageH + 33, 8, Font.PLAIN, MUTED);
         }
         return y + h;
     }
@@ -208,7 +256,7 @@ final class ReportRenderer {
         for (int i = 0; i < count; i++) {
             TopUser user = data.topUsers().get(i);
             int rowY = y + 36 + i * 25;
-            drawAvatar(g, x + 14, rowY + 1, 18, user.userId(), user.displayName());
+            drawAvatar(g, x + 14, rowY + 1, 18, AvatarService.Type.USER, user.userId(), user.displayName());
             drawText(g, "#" + (i + 1), x + 39, rowY + 15, 10, Font.BOLD, ACCENTS[i % ACCENTS.length]);
             drawText(g, user.displayName(), x + 66, rowY + 15, 10, Font.PLAIN, TEXT);
             int barX = x + 230;
@@ -292,16 +340,19 @@ final class ReportRenderer {
             drawText(g, "这段时间互动链路还不够明显。", x + 14, y + 58, 11, Font.PLAIN, MUTED);
             return y + h;
         }
+        Map<String, String> userIds = userIdsByName(data);
         for (int i = 0; i < data.interactions().size(); i++) {
             Interaction interaction = data.interactions().get(i);
             int rowY = y + 34 + i * 22;
-            drawNameChip(g, x + 12, rowY, 112, 16, interaction.left(), interaction.left(), ACCENTS[i % ACCENTS.length]);
+            drawNameChip(g, x + 12, rowY, 112, 16, userIdForName(userIds, interaction.left()),
+                    interaction.left(), ACCENTS[i % ACCENTS.length]);
             int lineX = x + 132;
             g.setColor(ACCENTS[i % ACCENTS.length]);
             g.setStroke(new BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g.drawLine(lineX, rowY + 8, x + w - 150, rowY + 8);
             drawTextRight(g, interaction.count() + "次", x + w - 126, rowY + 12, 9, Font.BOLD, ACCENTS[i % ACCENTS.length]);
-            drawNameChip(g, x + w - 118, rowY, 106, 16, interaction.right(), interaction.right(), ACCENTS[(i + 3) % ACCENTS.length]);
+            drawNameChip(g, x + w - 118, rowY, 106, 16, userIdForName(userIds, interaction.right()),
+                    interaction.right(), ACCENTS[(i + 3) % ACCENTS.length]);
         }
         return y + h;
     }
@@ -336,6 +387,7 @@ final class ReportRenderer {
                 .toList();
         int h = 34 + wrapped.stream().mapToInt(lines -> 58 + lines.size() * 13).sum() + 8;
         drawSection(g, x, y, w, h, "主要话题");
+        Map<String, String> userIds = userIdsByName(data);
         int cy = y + 34;
         for (int i = 0; i < data.topics().size(); i++) {
             Topic topic = data.topics().get(i);
@@ -350,7 +402,8 @@ final class ReportRenderer {
             for (int j = 0; j < Math.min(5, topic.speakers().size()); j++) {
                 String speaker = topic.speakers().get(j);
                 int chipW = Math.min(88, 26 + g.getFontMetrics(font(8, Font.PLAIN)).stringWidth(speaker));
-                drawNameChip(g, chipX, chipY, chipW, 14, speaker, speaker, ACCENTS[(i + j) % ACCENTS.length]);
+                drawNameChip(g, chipX, chipY, chipW, 14, userIdForName(userIds, speaker), speaker,
+                        ACCENTS[(i + j) % ACCENTS.length]);
                 chipX += chipW + 4;
                 if (chipX > x + w - 92) {
                     break;
@@ -381,7 +434,7 @@ final class ReportRenderer {
             int cx = x + 12 + col * (cardW + gap);
             int cy = y + 36 + row * (cardH + gap);
             drawRound(g, cx, cy, cardW, cardH, 5, CARD);
-            drawAvatar(g, cx + 9, cy + 9, 22, profile.userId(), profile.name());
+            drawAvatar(g, cx + 9, cy + 9, 22, AvatarService.Type.USER, profile.userId(), profile.name());
             drawText(g, profile.name(), cx + 38, cy + 23, 10, Font.BOLD, TEXT);
             drawText(g, profile.title(), cx + 9, cy + 48, 11, Font.BOLD, ACCENTS[i % ACCENTS.length]);
             Font descriptionFont = font(9, Font.PLAIN);
@@ -438,10 +491,29 @@ final class ReportRenderer {
 
     private void drawNameChip(Graphics2D g, int x, int y, int w, int h, String id, String name, Color color) {
         drawRound(g, x, y, w, h, h / 2, CARD);
-        drawAvatar(g, x + 2, y + 2, h - 4, id, name);
+        drawAvatar(g, x + 2, y + 2, h - 4, AvatarService.Type.USER, id, name);
         drawText(g, SummaryText.trim(name, 9), x + h + 3, y + h - 5, Math.max(8, h - 7), Font.PLAIN, TEXT);
         g.setColor(color);
         g.fillOval(x + w - 8, y + h / 2 - 2, 4, 4);
+    }
+
+    private Map<String, String> userIdsByName(ReportData data) {
+        Map<String, String> result = new LinkedHashMap<>();
+        for (UserAggregate user : data.users().values()) {
+            if (user.displayName() != null && !user.displayName().isBlank()) {
+                result.putIfAbsent(user.displayName(), user.userId);
+            }
+        }
+        for (TopUser user : data.topUsers()) {
+            if (user.displayName() != null && !user.displayName().isBlank()) {
+                result.putIfAbsent(user.displayName(), user.userId());
+            }
+        }
+        return result;
+    }
+
+    private String userIdForName(Map<String, String> userIds, String name) {
+        return SummaryText.firstNotBlank(userIds.get(name), name);
     }
 
     private void drawPill(Graphics2D g, int x, int y, int w, int h, String text, Color color, boolean filled) {
@@ -456,7 +528,48 @@ final class ReportRenderer {
         }
     }
 
-    private void drawAvatar(Graphics2D g, int x, int y, int size, String id, String name) {
+    private void drawAvatar(Graphics2D g, int x, int y, int size, AvatarService.Type type, String id, String name) {
+        if (avatarService != null) {
+            BufferedImage image = avatarService.image(type, id).orElse(null);
+            if (image != null) {
+                drawImageAvatar(g, image, x, y, size);
+                return;
+            }
+        }
+        drawFallbackAvatar(g, x, y, size, id, name);
+    }
+
+    private void drawImageAvatar(Graphics2D g, BufferedImage image, int x, int y, int size) {
+        Shape oldClip = g.getClip();
+        g.setClip(new Ellipse2D.Float(x, y, size, size));
+        g.drawImage(image, x, y, size, size, null);
+        g.setClip(oldClip);
+        g.setColor(new Color(255, 255, 255, 44));
+        g.setStroke(new BasicStroke(Math.max(1f, size / 16f)));
+        g.drawOval(x, y, size - 1, size - 1);
+    }
+
+    private void drawThumbnail(Graphics2D g, BufferedImage image, int x, int y, int w, int h, int radius,
+                               boolean cover) {
+        Shape oldClip = g.getClip();
+        g.setClip(new RoundRectangle2D.Float(x, y, w, h, radius, radius));
+        g.setColor(CARD_DARK);
+        g.fillRect(x, y, w, h);
+        double scale = cover
+                ? Math.max(w / (double) image.getWidth(), h / (double) image.getHeight())
+                : Math.min(w / (double) image.getWidth(), h / (double) image.getHeight());
+        int drawW = Math.max(1, (int) Math.round(image.getWidth() * scale));
+        int drawH = Math.max(1, (int) Math.round(image.getHeight() * scale));
+        int dx = x + (w - drawW) / 2;
+        int dy = y + (h - drawH) / 2;
+        g.drawImage(image, dx, dy, drawW, drawH, null);
+        g.setClip(oldClip);
+        g.setColor(new Color(255, 255, 255, 38));
+        g.setStroke(new BasicStroke(1f));
+        g.drawRoundRect(x, y, w, h, radius, radius);
+    }
+
+    private void drawFallbackAvatar(Graphics2D g, int x, int y, int size, String id, String name) {
         Color color = colorFrom(id);
         g.setColor(color);
         g.fillOval(x, y, size, size);
@@ -570,6 +683,10 @@ final class ReportRenderer {
 
     private String formatTime(Instant instant) {
         return LocalDateTime.ofInstant(instant, zoneId).format(TIME_FORMAT);
+    }
+
+    private String formatShortTime(Instant instant) {
+        return LocalDateTime.ofInstant(instant, zoneId).format(DateTimeFormatter.ofPattern("HH:mm"));
     }
 
     private static String chooseFontFamily() {

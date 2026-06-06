@@ -2,6 +2,7 @@ package cn.zerobot.chatsummary;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.BufferedReader;
@@ -124,10 +125,22 @@ final class JsonMessageStore implements MessageStore {
         node.put("atCount", message.atCount());
         node.put("faceCount", message.faceCount());
         node.put("fileCount", message.fileCount());
+        ArrayNode images = MAPPER.createArrayNode();
+        for (ImageAttachment image : SummaryText.safeList(message.images())) {
+            ObjectNode item = MAPPER.createObjectNode();
+            item.put("file", image.file());
+            item.put("fileId", image.fileId());
+            item.put("url", image.url());
+            item.put("summary", image.summary());
+            item.put("subType", image.subType());
+            images.add(item);
+        }
+        node.set("images", images);
         return node;
     }
 
     private RecordedMessage fromJson(JsonNode node) {
+        List<ImageAttachment> images = parseImages(node.path("images"));
         return new RecordedMessage(
                 node.path("groupId").asText(""),
                 node.path("userId").asText("unknown"),
@@ -139,8 +152,26 @@ final class JsonMessageStore implements MessageStore {
                 node.path("imageCount").asInt(),
                 node.path("atCount").asInt(),
                 node.path("faceCount").asInt(),
-                node.path("fileCount").asInt()
+                node.path("fileCount").asInt(),
+                images
         );
+    }
+
+    private List<ImageAttachment> parseImages(JsonNode node) {
+        if (!node.isArray()) {
+            return List.of();
+        }
+        List<ImageAttachment> images = new ArrayList<>();
+        for (JsonNode item : node) {
+            images.add(new ImageAttachment(
+                    item.path("file").asText(""),
+                    SummaryText.firstNotBlank(item.path("fileId").asText(null), item.path("file_id").asText(null)),
+                    item.path("url").asText(""),
+                    item.path("summary").asText(""),
+                    SummaryText.firstNotBlank(item.path("subType").asText(null), item.path("sub_type").asText(null))
+            ));
+        }
+        return images;
     }
 
     private Path fileFor(String groupId, LocalDate date) {

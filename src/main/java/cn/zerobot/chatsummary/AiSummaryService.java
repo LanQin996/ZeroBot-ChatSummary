@@ -33,11 +33,17 @@ final class AiSummaryService {
     private final ZoneId zoneId;
     private final Logger logger;
     private final HttpClient client;
+    private final ImageCacheService imageCacheService;
 
     AiSummaryService(Settings settings, ZoneId zoneId, Logger logger) {
+        this(settings, zoneId, logger, null);
+    }
+
+    AiSummaryService(Settings settings, ZoneId zoneId, Logger logger, ImageCacheService imageCacheService) {
         this.settings = settings;
         this.zoneId = zoneId;
         this.logger = logger;
+        this.imageCacheService = imageCacheService;
         this.client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(timeoutSeconds()))
                 .build();
@@ -55,11 +61,26 @@ final class AiSummaryService {
         }
 
         try {
+            boolean includeImages = imageCacheService != null && settings.isAiImageInputEnabled();
+            Optional<AiReportEnhancement> result = requestEnhancement(data, apiKey, includeImages);
+            if (result.isPresent() || !includeImages) {
+                return result;
+            }
+            logger.debug("AI image input was not accepted or returned no report, retrying with text-only context");
+            return requestEnhancement(data, apiKey, false);
+        } catch (Exception e) {
+            logger.warn("AI chat summary request failed", e);
+            return Optional.empty();
+        }
+    }
+
+    private Optional<AiReportEnhancement> requestEnhancement(ReportData data, String apiKey, boolean includeImages) {
+        try {
             HttpRequest request = HttpRequest.newBuilder(endpoint())
                     .timeout(Duration.ofSeconds(timeoutSeconds()))
                     .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(requestBody(data))))
+                    .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(requestBody(data, includeImages))))
                     .build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -78,7 +99,7 @@ final class AiSummaryService {
         }
     }
 
-    private ObjectNode requestBody(ReportData data) {
+    private ObjectNode requestBody(ReportData data, boolean includeImages) {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", model());
         root.put("max_completion_tokens", SummaryText.clamp(settings.getAiMaxOutputTokens(), 500, 8000));
@@ -89,7 +110,7 @@ final class AiSummaryService {
 
         ArrayNode messages = MAPPER.createArrayNode();
         messages.add(message("system", systemPrompt()));
-        messages.add(message("user", userPrompt(data)));
+        messages.add(userMessage(data, includeImages));
         root.set("messages", messages);
         return root;
     }
@@ -101,11 +122,42 @@ final class AiSummaryService {
         return node;
     }
 
+    private ObjectNode userMessage(ReportData data, boolean includeImages) {
+        ObjectNode node = MAPPER.createObjectNode();
+        node.put("role", "user");
+        List<ImageCacheService.AiImage> images = includeImages ? imageCacheService.aiImages(data) : List.of();
+        if (images.isEmpty()) {
+            node.put("content", userPrompt(data));
+            return node;
+        }
+
+        ArrayNode content = MAPPER.createArrayNode();
+        ObjectNode text = MAPPER.createObjectNode();
+        text.put("type", "text");
+        text.put("text", userPrompt(data) + "\n图片输入：以下图片编号与聊天记录中的图片上下文对应，请只根据可见内容谨慎补充图片相关重点。");
+        content.add(text);
+        for (ImageCacheService.AiImage image : images) {
+            ObjectNode label = MAPPER.createObjectNode();
+            label.put("type", "text");
+            label.put("text", "图片 " + image.label());
+            content.add(label);
+            ObjectNode imageUrl = MAPPER.createObjectNode();
+            imageUrl.put("url", image.dataUrl());
+            imageUrl.put("detail", "low");
+            ObjectNode imageNode = MAPPER.createObjectNode();
+            imageNode.put("type", "image_url");
+            imageNode.set("image_url", imageUrl);
+            content.add(imageNode);
+        }
+        node.set("content", content);
+        return node;
+    }
+
     private String systemPrompt() {
         return """
                 你是一个中文群聊复盘主编。请根据真实聊天记录，策划一张群聊总结长图的核心内容。
                 只输出 JSON，不要 Markdown，不要代码块，不要解释。
-                必须保留事实边界：不能编造未出现的人、事件、数量、身份或结论。
+                必须保留事实边界：不能编造未出现的人、事件、数量、身份或结论。图片只作为上下文补充，无法确认的内容不要写成事实。
                 统计数字由系统提供，不能改写；你只负责决定哪些内容最值得展示。
                 风格要像群内复盘，清晰、有一点轻松感，抓重点、抓梗、抓转折，但不要攻击、羞辱或泄露敏感信息。
                 JSON 字段：
@@ -170,9 +222,45 @@ final class AiSummaryService {
                     .append('\n');
         }
 
+        prompt.append("图片上下文：\n");
+        appendImageContext(prompt, data.messages());
+
         prompt.append("聊天记录，按时间排序，最多 ").append(maxMessages()).append(" 条：\n");
         appendMessages(prompt, data.messages());
         return prompt.toString();
+    }
+
+    private void appendImageContext(StringBuilder prompt, List<RecordedMessage> messages) {
+        int count = 0;
+        for (RecordedMessage message : SummaryText.safeList(messages)) {
+            if (SummaryText.safeList(message.images()).isEmpty()) {
+                continue;
+            }
+            String descriptions = message.images().stream()
+                    .limit(3)
+                    .map(ImageAttachment::description)
+                    .collect(Collectors.joining("、"));
+            prompt.append("- [").append(LocalDateTime.ofInstant(message.time(), zoneId).format(TIME_FORMAT)).append("] ")
+                    .append(message.displayName()).append("(").append(message.userId()).append(")")
+                    .append(" 发了 ").append(message.images().size()).append(" 张图片");
+            if (!descriptions.isBlank()) {
+                prompt.append("：").append(SummaryText.trim(descriptions, 80));
+            }
+            String nearbyText = SummaryText.nullTo(message.text(), "")
+                    .replace("[图片]", "")
+                    .trim();
+            if (!nearbyText.isBlank()) {
+                prompt.append("，配文：").append(SummaryText.trim(nearbyText, 80));
+            }
+            prompt.append('\n');
+            count++;
+            if (count >= 40) {
+                break;
+            }
+        }
+        if (count == 0) {
+            prompt.append("- 无可用图片上下文\n");
+        }
     }
 
     private void appendMessages(StringBuilder prompt, List<RecordedMessage> messages) {

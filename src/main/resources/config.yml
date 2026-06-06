@@ -31,6 +31,27 @@ storageRetentionDays: 7
 # 定期清理间隔，单位分钟。会清理过期 JSONL 文件和内存中的过期群聊缓存。
 cleanupIntervalMinutes: 60
 
+# 是否下载并缓存群头像和 QQ 头像，用于报告头像展示。下载失败会自动使用占位头像。
+avatarEnabled: true
+
+# 头像缓存保留天数。文件保存在 data/chat-summary/avatars/。
+avatarCacheDays: 7
+
+# 单个头像下载超时时间，单位秒。
+avatarDownloadTimeoutSeconds: 5
+
+# 是否缓存群友发出的图片，用于报告里的“图片速览”。下载失败不会影响总结生成。
+imageCacheEnabled: true
+
+# 群聊图片缩略图缓存保留天数。文件保存在 data/chat-summary/images/<群号>/<日期>/。
+imageCacheDays: 7
+
+# 单张群聊图片下载超时时间，单位秒。
+imageDownloadTimeoutSeconds: 10
+
+# 报告中最多展示最近多少张已缓存群聊图片。设为 0 可关闭图片速览模块。
+imagePreviewLimit: 6
+
 # 忽略以 /、!、！、. 开头的普通消息，避免命令文本进入报告。
 ignoreCommandLikeMessages: true
 
@@ -73,6 +94,12 @@ aiMaxChars: 30000
 
 # AI 回复 token 上限。报告内容越丰富，这里可以适当调高。
 aiMaxOutputTokens: 2200
+
+# 是否把已缓存的群聊图片缩略图一起发送给 AI。需要模型支持视觉输入，开启后会增加消耗。
+aiImageInputEnabled: false
+
+# 单次最多发送给 AI 的图片数量，只取报告窗口内最近的已缓存图片。
+aiImageInputLimit: 4
 
 # -1 表示不发送 temperature 参数，兼容不同模型；需要时可改为 0.2、0.4 等。
 aiTemperature: -1

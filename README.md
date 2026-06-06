@@ -10,6 +10,7 @@
 - 活跃用户排行
 - 热词词云
 - 群奖项、互动关系、主要话题
+- 群聊图片速览
 - 群友画像、群聊金句
 
 ## 使用方式
@@ -76,6 +77,13 @@ maxMessagesPerGroup: 6000
 storageEnabled: true
 storageRetentionDays: 14
 cleanupIntervalMinutes: 60
+avatarEnabled: true
+avatarCacheDays: 7
+avatarDownloadTimeoutSeconds: 5
+imageCacheEnabled: true
+imageCacheDays: 7
+imageDownloadTimeoutSeconds: 10
+imagePreviewLimit: 6
 reportWidth: 560
 renderScale: 2
 sendGeneratingReply: false
@@ -89,6 +97,8 @@ aiTimeoutSeconds: 120
 aiMaxMessages: 360
 aiMaxChars: 30000
 aiMaxOutputTokens: 2200
+aiImageInputEnabled: false
+aiImageInputLimit: 4
 ```
 
 新版 ZeroBot 的命令入口声明在 `plugin.yml` 的 `commands` 中。
@@ -106,6 +116,22 @@ data/chat-summary/messages/<群号>/<yyyy-MM-dd>.jsonl
 ```
 
 `storageRetentionDays` 控制 JSONL 历史保留天数。插件会按 `cleanupIntervalMinutes` 定期清理过期 JSONL 文件和内存里的过期群聊缓存。内存缓存仍会保留，用于快速读取最近消息和磁盘不可用时兜底。
+
+报告会优先展示真实群头像和 QQ 头像，头像缓存目录：
+
+```text
+data/chat-summary/avatars/
+```
+
+下载失败时会自动回退到彩色占位头像。
+
+群友发送的图片会记录 OneBot 图片段中的 `url/file/file_id/summary/sub_type`，并尽快缓存缩略图：
+
+```text
+data/chat-summary/images/<群号>/<yyyy-MM-dd>/
+```
+
+报告会展示最近的已缓存图片；OneBot 图片 URL 过期、下载失败或格式不支持时，只保留图片计数和上下文文本，不会影响报告生成。`imageCacheDays` 控制缩略图保留时间。
 
 ## AI 报告策划
 
@@ -125,6 +151,15 @@ $env:OPENAI_API_KEY='sk-...'
 `aiBaseUrl` 使用 OpenAI Chat Completions 兼容接口，默认请求 `https://api.openai.com/v1/chat/completions`。如果你用 OneAPI、DeepSeek 兼容网关或自建代理，可以改成对应的 `/v1` 地址，并把 `aiModel` 改成服务商支持的模型。
 
 消息数、参与人数、活跃时段等统计数据仍由插件本地计算，避免 AI 改写事实。接口超时、返回格式异常或未配置 key 时，会自动回退到本地规则版报告。
+
+如果使用支持视觉输入的 OpenAI Chat Completions 兼容模型，可以开启：
+
+```yml
+aiImageInputEnabled: true
+aiImageInputLimit: 4
+```
+
+开启后插件会把最近的已缓存图片缩略图随聊天上下文一起发给 AI。兼容网关或模型不支持图片输入时，会自动重试纯文本总结。
 
 ## 权限
 

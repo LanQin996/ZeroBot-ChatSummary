@@ -1,12 +1,18 @@
 package cn.zerobot.chatsummary;
 
 import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Base64;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -20,6 +26,7 @@ public final class PreviewReportGenerator {
         settings.setMinHotWordCount(2);
         settings.setTopUserLimit(12);
         settings.setHotWordLimit(70);
+        settings.setImagePreviewLimit(6);
 
         ZoneId zoneId = SummaryText.resolveZone(settings.getTimeZone());
         LocalDateTime endTime = LocalDateTime.of(2026, 6, 6, 16, 0);
@@ -32,12 +39,17 @@ public final class PreviewReportGenerator {
         List<RecordedMessage> messages = sampleMessages(zoneId, endTime.minusHours(8));
         ReportData data = new ReportAnalyzer(settings, zoneId)
                 .analyze("10086", "ZeroBot 测试交流群", window, messages);
-        BufferedImage image = new ReportRenderer(settings, zoneId).render(data);
+        Path imageCache = Path.of("build", "preview", "images");
+        try (ImageCacheService imageCacheService = new ImageCacheService(settings, imageCache, zoneId,
+                AvatarServiceSmokeTest.quietLogger())) {
+            imageCacheService.warmup(messages);
+            BufferedImage image = new ReportRenderer(settings, zoneId, null, imageCacheService).render(data);
 
-        Path output = Path.of("build", "preview", "chat-summary-preview.png");
-        Files.createDirectories(output.getParent());
-        ImageIO.write(image, "png", output.toFile());
-        System.out.println(output.toAbsolutePath().normalize());
+            Path output = Path.of("build", "preview", "chat-summary-preview.png");
+            Files.createDirectories(output.getParent());
+            ImageIO.write(image, "png", output.toFile());
+            System.out.println(output.toAbsolutePath().normalize());
+        }
     }
 
     private static List<RecordedMessage> sampleMessages(ZoneId zoneId, LocalDateTime start) {
@@ -100,6 +112,9 @@ public final class PreviewReportGenerator {
             int images = text.contains("[图片]") || i % 17 == 0 ? 1 : 0;
             int at = text.contains("@") ? 1 : 0;
             int faces = i % 9 == 0 ? 1 : 0;
+            List<ImageAttachment> attachments = images > 0
+                    ? List.of(sampleImageAttachment(i, user[1]))
+                    : List.of();
             messages.add(new RecordedMessage(
                     "10086",
                     user[0],
@@ -111,9 +126,57 @@ public final class PreviewReportGenerator {
                     images,
                     at,
                     faces,
-                    0
+                    0,
+                    attachments
             ));
         }
         return messages;
+    }
+
+    private static ImageAttachment sampleImageAttachment(int index, String sender) {
+        return new ImageAttachment(
+                "preview-" + index + ".jpg",
+                "preview-" + index,
+                dataUrl(index, sender),
+                List.of("插件截图", "群聊梗图", "配置片段", "报告预览").get(index % 4),
+                "normal"
+        );
+    }
+
+    private static String dataUrl(int index, String sender) {
+        try {
+            BufferedImage image = new BufferedImage(640, 420, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = image.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            Color[] colors = {
+                    new Color(64, 143, 255),
+                    new Color(255, 188, 55),
+                    new Color(50, 214, 180),
+                    new Color(255, 100, 139)
+            };
+            Color base = colors[index % colors.length];
+            g.setColor(new Color(36, 33, 35));
+            g.fillRect(0, 0, 640, 420);
+            g.setColor(base);
+            g.fillRoundRect(36, 36, 568, 308, 28, 28);
+            g.setColor(new Color(255, 255, 255, 38));
+            g.fillOval(380, -70, 260, 260);
+            g.fillOval(-80, 235, 230, 230);
+            g.setColor(Color.WHITE);
+            g.setFont(new Font("SansSerif", Font.BOLD, 42));
+            g.drawString(List.of("ZeroBot", "AI Summary", "Image Cache", "Preview").get(index % 4), 68, 126);
+            g.setFont(new Font("SansSerif", Font.PLAIN, 25));
+            g.drawString(sender + " 发来的群聊图片", 70, 182);
+            g.setFont(new Font("SansSerif", Font.BOLD, 32));
+            g.drawString("#" + (index + 1), 70, 276);
+            g.dispose();
+
+            try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                ImageIO.write(image, "jpg", output);
+                return "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(output.toByteArray());
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

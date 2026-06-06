@@ -17,6 +17,15 @@ public class Settings {
     private boolean storageEnabled = true;
     private int storageRetentionDays = 14;
     private int cleanupIntervalMinutes = 60;
+    private boolean avatarEnabled = true;
+    private int avatarCacheDays = 7;
+    private int avatarDownloadTimeoutSeconds = 5;
+    private boolean imageCacheEnabled = true;
+    private int imageCacheDays = 7;
+    private int imageDownloadTimeoutSeconds = 10;
+    private int imagePreviewLimit = 6;
+    private boolean aiImageInputEnabled = false;
+    private int aiImageInputLimit = 4;
     private boolean ignoreCommandLikeMessages = true;
     private int reportWidth = 560;
     private int renderScale = 2;
@@ -149,6 +158,78 @@ public class Settings {
 
     public void setCleanupIntervalMinutes(int cleanupIntervalMinutes) {
         this.cleanupIntervalMinutes = cleanupIntervalMinutes;
+    }
+
+    public boolean isAvatarEnabled() {
+        return avatarEnabled;
+    }
+
+    public void setAvatarEnabled(boolean avatarEnabled) {
+        this.avatarEnabled = avatarEnabled;
+    }
+
+    public int getAvatarCacheDays() {
+        return avatarCacheDays;
+    }
+
+    public void setAvatarCacheDays(int avatarCacheDays) {
+        this.avatarCacheDays = avatarCacheDays;
+    }
+
+    public int getAvatarDownloadTimeoutSeconds() {
+        return avatarDownloadTimeoutSeconds;
+    }
+
+    public void setAvatarDownloadTimeoutSeconds(int avatarDownloadTimeoutSeconds) {
+        this.avatarDownloadTimeoutSeconds = avatarDownloadTimeoutSeconds;
+    }
+
+    public boolean isImageCacheEnabled() {
+        return imageCacheEnabled;
+    }
+
+    public void setImageCacheEnabled(boolean imageCacheEnabled) {
+        this.imageCacheEnabled = imageCacheEnabled;
+    }
+
+    public int getImageCacheDays() {
+        return imageCacheDays;
+    }
+
+    public void setImageCacheDays(int imageCacheDays) {
+        this.imageCacheDays = imageCacheDays;
+    }
+
+    public int getImageDownloadTimeoutSeconds() {
+        return imageDownloadTimeoutSeconds;
+    }
+
+    public void setImageDownloadTimeoutSeconds(int imageDownloadTimeoutSeconds) {
+        this.imageDownloadTimeoutSeconds = imageDownloadTimeoutSeconds;
+    }
+
+    public int getImagePreviewLimit() {
+        return imagePreviewLimit;
+    }
+
+    public void setImagePreviewLimit(int imagePreviewLimit) {
+        this.imagePreviewLimit = imagePreviewLimit;
+    }
+
+    public boolean isAiImageInputEnabled() {
+        return aiImageInputEnabled;
+    }
+
+    public void setAiImageInputEnabled(boolean aiImageInputEnabled) {
+        this.aiImageInputEnabled = aiImageInputEnabled;
+    }
+
+    public int getAiImageInputLimit() {
+        return aiImageInputLimit;
+    }
+
+    public void setAiImageInputLimit(int aiImageInputLimit) {
+        this.aiImageInputLimit = aiImageInputLimit;
     }
 
     public boolean isIgnoreCommandLikeMessages() {
