@@ -17,9 +17,13 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -33,6 +37,8 @@ public class ChatSummaryPlugin implements BotPlugin {
     private BotContext context;
     private Settings settings;
     private ZoneId zoneId;
+    private MessageStore messageStore;
+    private ScheduledExecutorService cleanupExecutor;
     private boolean legacyCommandFallback;
 
     @Override
@@ -42,6 +48,8 @@ public class ChatSummaryPlugin implements BotPlugin {
         this.settings = context.loadConfig("config.yml", Settings.class);
         this.zoneId = SummaryText.resolveZone(settings.getTimeZone());
         Files.createDirectories(reportsDir());
+        this.messageStore = createMessageStore(context);
+        startCleanupTask();
 
         this.legacyCommandFallback = !registerSummaryCommand(context);
         context.onGroupMessage(this::handleGroupMessage);
@@ -58,6 +66,10 @@ public class ChatSummaryPlugin implements BotPlugin {
 
     @Override
     public void onUnload() {
+        if (cleanupExecutor != null) {
+            cleanupExecutor.shutdownNow();
+            cleanupExecutor = null;
+        }
         buffers.clear();
         if (context != null) {
             context.logger().info("ChatSummaryPlugin unloaded");
@@ -85,6 +97,7 @@ public class ChatSummaryPlugin implements BotPlugin {
 
         buffers.computeIfAbsent(message.groupId(), key -> new GroupBuffer())
                 .add(message, retentionCutoff(), maxMessagesPerGroup());
+        appendStoredMessage(message);
     }
 
     private boolean registerSummaryCommand(BotContext context) {
@@ -119,8 +132,7 @@ public class ChatSummaryPlugin implements BotPlugin {
         }
 
         String groupId = event.groupId();
-        GroupBuffer buffer = buffers.get(groupId);
-        List<RecordedMessage> messages = buffer == null ? List.of() : buffer.snapshot(window.from(), window.to());
+        List<RecordedMessage> messages = loadMessages(groupId, window);
         if (messages.isEmpty()) {
             replyText(event, "这段时间还没有可用于生成总结的群聊记录。");
             return;
@@ -339,9 +351,109 @@ public class ChatSummaryPlugin implements BotPlugin {
         return context.dataDir().resolve("reports");
     }
 
+    private Path messagesDir() {
+        return context.dataDir().resolve("messages");
+    }
+
+    private MessageStore createMessageStore(BotContext context) {
+        if (!settings.isStorageEnabled()) {
+            return null;
+        }
+        try {
+            MessageStore store = new JsonMessageStore(messagesDir(), zoneId);
+            store.prune(storageCutoff());
+            return store;
+        } catch (Exception e) {
+            context.logger().warn("Failed to initialize chat message storage, using memory buffer only", e);
+            return null;
+        }
+    }
+
+    private void startCleanupTask() {
+        int intervalMinutes = Math.max(1, settings.getCleanupIntervalMinutes());
+        cleanupExecutor = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "chat-summary-cleanup");
+            thread.setDaemon(true);
+            return thread;
+        });
+        cleanupExecutor.scheduleWithFixedDelay(this::cleanupCaches, intervalMinutes, intervalMinutes, TimeUnit.MINUTES);
+    }
+
+    private void cleanupCaches() {
+        try {
+            cleanupMemoryBuffers();
+            if (messageStore != null) {
+                messageStore.prune(storageCutoff());
+            }
+        } catch (Exception e) {
+            if (context != null) {
+                context.logger().warn("Failed to clean chat summary caches", e);
+            }
+        }
+    }
+
+    private void cleanupMemoryBuffers() {
+        Instant cutoff = retentionCutoff();
+        int maxSize = maxMessagesPerGroup();
+        buffers.entrySet().removeIf(entry -> entry.getValue().pruneAndIsEmpty(cutoff, maxSize));
+    }
+
+    private void appendStoredMessage(RecordedMessage message) {
+        if (messageStore == null) {
+            return;
+        }
+        try {
+            messageStore.append(message);
+        } catch (Exception e) {
+            context.logger().warn("Failed to persist chat message, groupId={}, messageId={}",
+                    message.groupId(), message.messageId(), e);
+        }
+    }
+
+    private List<RecordedMessage> loadMessages(String groupId, ReportWindow window) {
+        List<RecordedMessage> hotMessages = hotMessages(groupId, window);
+        if (messageStore == null) {
+            return hotMessages;
+        }
+        try {
+            List<RecordedMessage> stored = messageStore.query(groupId, window.from(), window.to());
+            return mergeMessages(stored, hotMessages);
+        } catch (Exception e) {
+            context.logger().warn("Failed to query persisted chat messages, groupId={}", groupId, e);
+            return hotMessages;
+        }
+    }
+
+    private List<RecordedMessage> hotMessages(String groupId, ReportWindow window) {
+        GroupBuffer buffer = buffers.get(groupId);
+        return buffer == null ? List.of() : buffer.snapshot(window.from(), window.to());
+    }
+
+    private List<RecordedMessage> mergeMessages(List<RecordedMessage> stored, List<RecordedMessage> hotMessages) {
+        Map<String, RecordedMessage> merged = new LinkedHashMap<>();
+        for (RecordedMessage message : SummaryText.safeList(stored)) {
+            merged.put(messageKey(message), message);
+        }
+        for (RecordedMessage message : SummaryText.safeList(hotMessages)) {
+            merged.putIfAbsent(messageKey(message), message);
+        }
+        return merged.values().stream()
+                .sorted(Comparator.comparing(RecordedMessage::time).thenComparingLong(RecordedMessage::messageId))
+                .toList();
+    }
+
+    private String messageKey(RecordedMessage message) {
+        return message.groupId() + "|" + message.messageId() + "|" + message.time().toEpochMilli();
+    }
+
     private Instant retentionCutoff() {
         int hours = Math.max(settings.getRetentionHours(), maxWindowHours());
         return Instant.now().minus(Duration.ofHours(hours));
+    }
+
+    private Instant storageCutoff() {
+        int days = Math.max(1, settings.getStorageRetentionDays());
+        return Instant.now().minus(Duration.ofDays(days));
     }
 
     private int maxWindowHours() {

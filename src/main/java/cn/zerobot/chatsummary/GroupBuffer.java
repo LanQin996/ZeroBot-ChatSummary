@@ -21,6 +21,11 @@ final class GroupBuffer {
                 .toList();
     }
 
+    synchronized boolean pruneAndIsEmpty(Instant cutoff, int maxSize) {
+        prune(cutoff, maxSize);
+        return messages.isEmpty();
+    }
+
     private void prune(Instant cutoff, int maxSize) {
         while (!messages.isEmpty() && messages.peekFirst().time().isBefore(cutoff)) {
             messages.removeFirst();

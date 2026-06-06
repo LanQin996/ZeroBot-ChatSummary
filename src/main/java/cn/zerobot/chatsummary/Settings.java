@@ -14,6 +14,9 @@ public class Settings {
     private int maxHours = 168;
     private int retentionHours = 168;
     private int maxMessagesPerGroup = 6000;
+    private boolean storageEnabled = true;
+    private int storageRetentionDays = 14;
+    private int cleanupIntervalMinutes = 60;
     private boolean ignoreCommandLikeMessages = true;
     private int reportWidth = 560;
     private int renderScale = 2;
@@ -122,6 +125,30 @@ public class Settings {
 
     public void setMaxMessagesPerGroup(int maxMessagesPerGroup) {
         this.maxMessagesPerGroup = maxMessagesPerGroup;
+    }
+
+    public boolean isStorageEnabled() {
+        return storageEnabled;
+    }
+
+    public void setStorageEnabled(boolean storageEnabled) {
+        this.storageEnabled = storageEnabled;
+    }
+
+    public int getStorageRetentionDays() {
+        return storageRetentionDays;
+    }
+
+    public void setStorageRetentionDays(int storageRetentionDays) {
+        this.storageRetentionDays = storageRetentionDays;
+    }
+
+    public int getCleanupIntervalMinutes() {
+        return cleanupIntervalMinutes;
+    }
+
+    public void setCleanupIntervalMinutes(int cleanupIntervalMinutes) {
+        this.cleanupIntervalMinutes = cleanupIntervalMinutes;
     }
 
     public boolean isIgnoreCommandLikeMessages() {

@@ -38,7 +38,7 @@ reload-all
 /群总结 昨天     # 总结昨天 00:00 到今天 00:00
 ```
 
-插件只会总结它加载后缓存到的消息。刚安装后立刻生成报告时，如果群里还没有新消息，会提示暂无可用记录。
+插件会把群聊上下文追加保存为 JSONL。刚安装后立刻生成报告时，如果还没有记录到新消息，会提示暂无可用记录。
 
 ## 构建
 
@@ -73,6 +73,9 @@ defaultHours: 24
 maxHours: 168
 retentionHours: 168
 maxMessagesPerGroup: 6000
+storageEnabled: true
+storageRetentionDays: 14
+cleanupIntervalMinutes: 60
 reportWidth: 560
 renderScale: 2
 sendGeneratingReply: false
@@ -82,10 +85,10 @@ aiBaseUrl: https://api.openai.com/v1
 aiApiKey: ""
 aiApiKeyEnv: OPENAI_API_KEY
 aiModel: gpt-5.4-nano
-aiTimeoutSeconds: 20
-aiMaxMessages: 180
-aiMaxChars: 12000
-aiMaxOutputTokens: 1500
+aiTimeoutSeconds: 120
+aiMaxMessages: 360
+aiMaxChars: 30000
+aiMaxOutputTokens: 2200
 ```
 
 新版 ZeroBot 的命令入口声明在 `plugin.yml` 的 `commands` 中。
@@ -95,6 +98,14 @@ aiMaxOutputTokens: 1500
 ```text
 data/chat-summary/reports/
 ```
+
+群消息上下文会保存为一行一个 JSON：
+
+```text
+data/chat-summary/messages/<群号>/<yyyy-MM-dd>.jsonl
+```
+
+`storageRetentionDays` 控制 JSONL 历史保留天数。插件会按 `cleanupIntervalMinutes` 定期清理过期 JSONL 文件和内存里的过期群聊缓存。内存缓存仍会保留，用于快速读取最近消息和磁盘不可用时兜底。
 
 ## AI 报告策划
 

@@ -22,6 +22,15 @@ retentionHours: 168
 # 每个群最多缓存多少条消息，防止长期运行占用过多内存。
 maxMessagesPerGroup: 6000
 
+# 是否把群消息追加写入 JSONL 文件。开启后重启插件也能读取历史上下文。
+storageEnabled: true
+
+# JSONL 历史消息保留天数。文件保存在 data/chat-summary/messages/<群号>/<日期>.jsonl。
+storageRetentionDays: 7
+
+# 定期清理间隔，单位分钟。会清理过期 JSONL 文件和内存中的过期群聊缓存。
+cleanupIntervalMinutes: 60
+
 # 忽略以 /、!、！、. 开头的普通消息，避免命令文本进入报告。
 ignoreCommandLikeMessages: true
 

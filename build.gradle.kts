@@ -31,3 +31,10 @@ tasks.register<JavaExec>("previewReport") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("cn.zerobot.chatsummary.PreviewReportGenerator")
 }
+
+tasks.register<JavaExec>("verifyJsonMessageStore") {
+    group = "verification"
+    description = "Verify JSONL chat message persistence with a small smoke test."
+    classpath = sourceSets["test"].runtimeClasspath + sourceSets["main"].compileClasspath
+    mainClass.set("cn.zerobot.chatsummary.JsonMessageStoreSmokeTest")
+}
