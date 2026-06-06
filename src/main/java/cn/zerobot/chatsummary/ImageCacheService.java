@@ -110,7 +110,7 @@ final class ImageCacheService implements AutoCloseable {
             return List.of();
         }
         List<ReportImage> result = new ArrayList<>();
-        for (ImageRef ref : refs(data.messages(), limit, true)) {
+        for (ImageRef ref : refs(data.messages(), limit)) {
             Optional<BufferedImage> image = image(ref.message(), ref.index(), ref.attachment());
             image.ifPresent(buffered -> result.add(new ReportImage(
                     buffered,
@@ -133,7 +133,7 @@ final class ImageCacheService implements AutoCloseable {
         }
         List<AiImage> result = new ArrayList<>();
         int number = 1;
-        for (ImageRef ref : refs(data.messages(), limit, true)) {
+        for (ImageRef ref : refs(data.messages(), limit)) {
             Optional<BufferedImage> image = image(ref.message(), ref.index(), ref.attachment());
             if (image.isEmpty()) {
                 continue;
@@ -331,10 +331,6 @@ final class ImageCacheService implements AutoCloseable {
     }
 
     private List<ImageRef> refs(List<RecordedMessage> messages, int limit) {
-        return refs(messages, limit, false);
-    }
-
-    private List<ImageRef> refs(List<RecordedMessage> messages, int limit, boolean previewOnly) {
         List<ImageRef> refs = new ArrayList<>();
         for (RecordedMessage message : SummaryText.safeList(messages).stream()
                 .sorted(Comparator.comparing(RecordedMessage::time))
@@ -342,7 +338,7 @@ final class ImageCacheService implements AutoCloseable {
             List<ImageAttachment> images = SummaryText.safeList(message.images());
             for (int i = 0; i < images.size(); i++) {
                 ImageAttachment attachment = images.get(i);
-                if (attachment.hasSource() && (!previewOnly || isReportPreviewImage(attachment))) {
+                if (attachment.hasSource()) {
                     refs.add(new ImageRef(message, i, attachment));
                 }
             }
@@ -351,20 +347,6 @@ final class ImageCacheService implements AutoCloseable {
             refs = new ArrayList<>(refs.subList(refs.size() - limit, refs.size()));
         }
         return refs;
-    }
-
-    private boolean isReportPreviewImage(ImageAttachment attachment) {
-        String summary = SummaryText.nullTo(attachment.summary(), "").toLowerCase();
-        String subType = SummaryText.nullTo(attachment.subType(), "").toLowerCase();
-        String file = SummaryText.nullTo(attachment.file(), "").toLowerCase();
-        String url = SummaryText.nullTo(attachment.url(), "").toLowerCase();
-        if (summary.contains("动画表情") || summary.contains("表情")) {
-            return false;
-        }
-        if (subType.contains("face") || subType.contains("emoji") || subType.contains("sticker")) {
-            return false;
-        }
-        return !file.endsWith(".gif") && !url.contains(".gif");
     }
 
     private String caption(RecordedMessage message, ImageAttachment attachment) {

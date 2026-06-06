@@ -167,10 +167,11 @@ final class AiSummaryService {
                   "tags": [{"title":"4 到 8 字奖项名","value":"8 字内结果","description":"16 到 28 字解释"}],
                   "topics": [{"title":"12 到 22 字事件式标题，必须说明发生了什么，不要只写抽象关键词","keywords":["相关热词"],"summary":"70 到 130 个中文字符，说明谁围绕什么问题/事件讨论、有什么观点或结论"}],
                   "profiles": [{"userId":"必须来自输入 candidates","title":"6 字内标签","description":"28 到 55 个中文字符"}],
-                  "quotes": [{"name":"原发言人名称","text":"尽量使用原话或轻微清理后的原话"}]
+                  "quotes": [{"name":"原发言人名称","text":"必须来自候选金句，尽量使用原话或轻微清理后的原话"}]
                 }
                 tags 最多 4，topics 最多 5，profiles 最多 6，quotes 最多 5。
                 topics.title 禁止只输出“时间、攻击、机制、分身、主体、图片、AI”这类单词；应该像“分身攻击窗口与机制讨论”“图片生成接口报错与分组切换测试”这样能直接看懂。
+                quotes 只选有梗、有观点、有反差、吐槽、总结感或群内语气的句子；不要选配置说明、路径、命令、报错流水账、纯教程句。
                 keywords 不要输出“这个、那个、我们、可以、哈哈”等泛词。
                 如果聊天内容很少，也要输出精简但真实的报告方案。""";
     }
@@ -450,6 +451,7 @@ final class AiSummaryService {
         }
 
         Map<String, List<String>> quoteCandidates = quoteCandidates(data);
+        Map<String, String> namesByUserId = namesByUserId(data);
         List<Quote> result = new ArrayList<>();
         for (JsonNode item : node) {
             if (result.size() >= settings.getQuoteLimit()) {
@@ -461,7 +463,7 @@ final class AiSummaryService {
                 continue;
             }
             if (isSupportedQuote(name, text, quoteCandidates)) {
-                result.add(new Quote(name, text));
+                result.add(new Quote(name, SummaryText.replaceMentions(text, namesByUserId)));
             }
         }
         return result;
@@ -469,6 +471,7 @@ final class AiSummaryService {
 
     private Map<String, List<String>> quoteCandidates(ReportData data) {
         Map<String, List<String>> candidates = new HashMap<>();
+        Map<String, String> namesByUserId = namesByUserId(data);
         for (RecordedMessage message : data.messages().stream()
                 .filter(message -> message.readableLength() >= settings.getMinQuoteLength())
                 .sorted(Comparator.comparingInt(RecordedMessage::readableLength).reversed())
@@ -476,12 +479,19 @@ final class AiSummaryService {
                 .toList()) {
             candidates.computeIfAbsent(message.displayName(), ignored -> new ArrayList<>())
                     .add(normalizeQuote(message.text()));
+            candidates.computeIfAbsent(message.displayName(), ignored -> new ArrayList<>())
+                    .add(normalizeQuote(SummaryText.replaceMentions(message.text(), namesByUserId)));
         }
         for (Quote quote : data.quotes()) {
             candidates.computeIfAbsent(quote.name(), ignored -> new ArrayList<>())
                     .add(normalizeQuote(quote.text()));
         }
         return candidates;
+    }
+
+    private Map<String, String> namesByUserId(ReportData data) {
+        return data.users().values().stream()
+                .collect(Collectors.toMap(user -> user.userId, UserAggregate::displayName, (a, b) -> a, LinkedHashMap::new));
     }
 
     private boolean isSupportedQuote(String name, String text, Map<String, List<String>> candidates) {

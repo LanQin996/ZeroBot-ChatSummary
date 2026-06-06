@@ -3,6 +3,7 @@ package cn.zerobot.chatsummary;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -98,5 +99,24 @@ final class SummaryText {
         }
         int end = normalized.offsetByCodePoints(0, Math.max(0, maxLength - 3));
         return normalized.substring(0, end) + "...";
+    }
+
+    static String replaceMentions(String text, Map<String, String> namesByUserId) {
+        if (text == null || text.isBlank() || namesByUserId == null || namesByUserId.isEmpty()) {
+            return nullTo(text, "");
+        }
+        Matcher matcher = Pattern.compile("@(\\d{4,})").matcher(text);
+        StringBuilder result = new StringBuilder();
+        while (matcher.find()) {
+            String userId = matcher.group(1);
+            String name = namesByUserId.get(userId);
+            if (name == null || name.isBlank()) {
+                matcher.appendReplacement(result, Matcher.quoteReplacement(matcher.group()));
+            } else {
+                matcher.appendReplacement(result, Matcher.quoteReplacement("@" + name));
+            }
+        }
+        matcher.appendTail(result);
+        return result.toString();
     }
 }
